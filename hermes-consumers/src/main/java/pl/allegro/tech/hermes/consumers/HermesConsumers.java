@@ -27,6 +27,7 @@ public class HermesConsumers {
     private final ConsumersSupervisor consumersSupervisor;
     private final HealthCheckServer healthCheckServer;
 
+
     public static void main(String... args) {
         consumers().build().start();
     }
@@ -37,7 +38,6 @@ public class HermesConsumers {
         final ServiceLocator serviceLocator = createDIContainer(binders);
         consumersSupervisor = serviceLocator.getService(ConsumersSupervisor.class);
         healthCheckServer = serviceLocator.getService(HealthCheckServer.class);
-
         hooksHandler.addShutdownHook(() -> {
             try {
                 healthCheckServer.stop();

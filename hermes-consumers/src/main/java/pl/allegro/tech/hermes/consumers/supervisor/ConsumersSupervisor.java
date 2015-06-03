@@ -2,6 +2,7 @@ package pl.allegro.tech.hermes.consumers.supervisor;
 
 import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
+import org.eclipse.jetty.util.ConcurrentArrayQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import pl.allegro.tech.hermes.api.Subscription;
@@ -11,6 +12,9 @@ import pl.allegro.tech.hermes.common.admin.AdminOperationsCallback;
 import pl.allegro.tech.hermes.common.admin.zookeeper.ZookeeperAdminCache;
 import pl.allegro.tech.hermes.common.broker.BrokerStorage;
 import pl.allegro.tech.hermes.common.config.ConfigFactory;
+import pl.allegro.tech.hermes.consumers.consumer.sender.MessageSendingResult;
+import pl.allegro.tech.hermes.consumers.consumer.sender.TimeoutedSendMessagesChecker;
+import pl.allegro.tech.hermes.common.util.ValueWithTimestamp;
 import pl.allegro.tech.hermes.consumers.message.undelivered.UndeliveredMessageLogPersister;
 import pl.allegro.tech.hermes.common.metric.HermesMetrics;
 import pl.allegro.tech.hermes.consumers.consumer.Consumer;
@@ -26,6 +30,9 @@ import pl.allegro.tech.hermes.domain.subscription.offset.SubscriptionOffsetChang
 
 import javax.inject.Inject;
 import java.util.List;
+import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
 
 import static pl.allegro.tech.hermes.api.Subscription.State.ACTIVE;
 import static pl.allegro.tech.hermes.api.Subscription.State.PENDING;
@@ -53,6 +60,10 @@ public class ConsumersSupervisor implements SubscriptionCallback, AdminOperation
 
     private final String brokersClusterName;
     private final UndeliveredMessageLogPersister undeliveredMessageLogPersister;
+    private final TimeoutedSendMessagesChecker timeoutedSendMessagesChecker;
+
+    private final Queue<ValueWithTimestamp<CompletableFuture<MessageSendingResult>>> sendMessagesResultsQueue;
+
 
     @Inject
     public ConsumersSupervisor(ConfigFactory configFactory,
@@ -84,6 +95,11 @@ public class ConsumersSupervisor implements SubscriptionCallback, AdminOperation
         offsetCommitter = new OffsetCommitter(consumerHolder, messageCommitter, configFactory, asyncOffsetMonitor);
 
         brokersClusterName = configFactory.getStringProperty(KAFKA_CLUSTER_NAME);
+
+        sendMessagesResultsQueue = new ConcurrentArrayQueue<>();
+        timeoutedSendMessagesChecker = new TimeoutedSendMessagesChecker(sendMessagesResultsQueue);
+        Executors.newSingleThreadExecutor().execute(timeoutedSendMessagesChecker);
+
     }
 
     @Override

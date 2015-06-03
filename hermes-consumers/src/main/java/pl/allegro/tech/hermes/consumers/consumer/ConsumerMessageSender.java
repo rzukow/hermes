@@ -5,15 +5,15 @@ import org.slf4j.LoggerFactory;
 import pl.allegro.tech.hermes.api.Subscription;
 import pl.allegro.tech.hermes.common.metric.ConsumerLatencyTimer;
 import pl.allegro.tech.hermes.common.metric.HermesMetrics;
+import pl.allegro.tech.hermes.common.util.ValueWithTimestamp;
 import pl.allegro.tech.hermes.consumers.consumer.rate.ConsumerRateLimiter;
 import pl.allegro.tech.hermes.consumers.consumer.receiver.Message;
 import pl.allegro.tech.hermes.consumers.consumer.result.ErrorHandler;
 import pl.allegro.tech.hermes.consumers.consumer.result.SuccessHandler;
 import pl.allegro.tech.hermes.consumers.consumer.sender.MessageSender;
 import pl.allegro.tech.hermes.consumers.consumer.sender.MessageSendingResult;
-import pl.allegro.tech.hermes.consumers.utils.FutureAsyncTimeout;
 
-import java.time.Duration;
+import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -33,8 +33,7 @@ public class ConsumerMessageSender {
     private final MessageSender messageSender;
     private final Semaphore inflightSemaphore;
     private final HermesMetrics hermesMetrics;
-    private final FutureAsyncTimeout<MessageSendingResult> async;
-    private final int asyncTimeoutMs;
+    private final Queue<ValueWithTimestamp<CompletableFuture<MessageSendingResult>>> completableFuturesQueue;
 
     private Subscription subscription;
 
@@ -42,7 +41,7 @@ public class ConsumerMessageSender {
 
     public ConsumerMessageSender(Subscription subscription, MessageSender messageSender, SuccessHandler successHandler,
                                  ErrorHandler errorHandler, ConsumerRateLimiter rateLimiter, ExecutorService deliveryReportingExecutor,
-                                 Semaphore inflightSemaphore, HermesMetrics hermesMetrics, int asyncTimeoutMs) {
+                                 Semaphore inflightSemaphore, HermesMetrics hermesMetrics, Queue<ValueWithTimestamp<CompletableFuture<MessageSendingResult>>> completableFuturesQueue) {
         this.deliveryReportingExecutor = deliveryReportingExecutor;
         this.successHandler = successHandler;
         this.errorHandler = errorHandler;
@@ -51,9 +50,8 @@ public class ConsumerMessageSender {
         this.subscription = subscription;
         this.inflightSemaphore = inflightSemaphore;
         this.retrySingleThreadExecutor = Executors.newSingleThreadExecutor();
-        this.async = new FutureAsyncTimeout<>(MessageSendingResult::loggedFailResult);
         this.hermesMetrics = hermesMetrics;
-        this.asyncTimeoutMs = asyncTimeoutMs;
+        this.completableFuturesQueue = completableFuturesQueue;
     }
 
     public void shutdown() {
@@ -87,7 +85,11 @@ public class ConsumerMessageSender {
 
     private void submitAsyncSendMessageRequest(final Message message, final ConsumerLatencyTimer consumerLatencyTimer) {
         rateLimiter.acquire();
-        final CompletableFuture<MessageSendingResult> response = async.within(messageSender.send(message), Duration.ofMillis(asyncTimeoutMs));
+
+        final CompletableFuture<MessageSendingResult>  response = messageSender.send(message);
+
+        completableFuturesQueue.add(ValueWithTimestamp.getNow(response));
+
         response.thenAcceptAsync(new DeliveryCountersReportingListener(message), deliveryReportingExecutor);
         response.thenAcceptAsync(new ResponseHandlingListener(message, consumerLatencyTimer), retrySingleThreadExecutor);
     }
